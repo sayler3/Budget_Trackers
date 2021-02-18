@@ -1,6 +1,109 @@
 let transactions = [];
 let myChart;
 
+function checkForIndexedDb() {
+	if (!window.indexedDB) {
+		console.log("Your browser doesn't support a stable version of IndexedDB.");
+		return false;
+	}
+	return true;
+}
+
+//This has all the transactions that indexDB uses
+function useIndexedDb(databaseName, storeName, method, object) {
+	return new Promise((resolve, reject) => {
+		const request = window.indexedDB.open(databaseName, 1);
+
+		let db, tx, store;
+
+		request.onupgradeneeded = function (e) {
+			const db = request.result;
+			db.createObjectStore(storeName, {
+				keyPath: "_id",
+				autoIncrement: true,
+			});
+		};
+
+		request.onerror = function (e) {
+			console.log("There was an error");
+		};
+
+		request.onsuccess = function (e) {
+			db = request.result;
+			tx = db.transaction(storeName, "readwrite");
+			store = tx.objectStore(storeName);
+
+			db.onerror = function (e) {
+				console.log("error");
+			};
+
+			switch (method) {
+				case "put":
+					store.put(object);
+					break;
+				case "get":
+					const all = store.getAll();
+					all.onsuccess = function () {
+						resolve(all.result);
+					};
+					break;
+				case "delete":
+					store.delete(object._id);
+					break;
+			}
+
+			// if (method === "put") {
+			// 	store.put(object);
+			// } else if (method === "get") {
+			// 	const all = store.getAll();
+			// 	all.onsuccess = function () {
+			// 		resolve(all.result);
+			// 	};
+			// } else if (method === "delete") {
+			// 	store.delete(object._id);
+			// }
+
+			tx.oncomplete = function () {
+				db.close();
+			};
+		};
+	});
+}
+
+function checkUploadIndexDB(databaseName, storeName) {
+	useIndexedDb(databaseName, storeName, "get", "all").then((response) => {
+		let bulkCreate = [];
+		response.forEach((element) => {
+			let newE = {
+				name: element.name,
+				date: element.date,
+				value: element.value,
+			};
+			bulkCreate.push(newE);
+		});
+		fetch("/api/transaction/bulk", {
+			method: "POST",
+			body: JSON.stringify(bulkCreate),
+			headers: {
+				Accept: "application/json, text/plain, */*",
+				"Content-Type": "application/json",
+			},
+		})
+			.then((response) => {
+				console.log(response);
+				// remove the database if when the bulk add is done
+				let req = window.indexedDB.deleteDatabase(databaseName);
+				req.onsuccess = function () {
+					console.log("Deleted database successfully");
+				};
+				req.onerror = function () {
+					console.log("Couldn't delete database");
+				};
+			})
+			.catch((err) => console.log(err));
+	});
+}
+
 fetch("/api/transaction")
 	.then((response) => {
 		return response.json();
@@ -8,7 +111,7 @@ fetch("/api/transaction")
 	.then((data) => {
 		// save db data on global variable
 		transactions = data;
-
+		checkUploadIndexDB("budgetDB", "pending");
 		populateTotal();
 		populateTable();
 		populateChart();
@@ -99,6 +202,12 @@ function sendTransaction(isAdding) {
 		value: amountEl.value,
 		date: new Date().toISOString(),
 	};
+
+	function saveRecord(transaction) {
+		if (checkForIndexedDb) {
+			useIndexedDb("budgetDB", "pending", "put", transaction);
+		}
+	}
 
 	// if subtracting funds, convert amount to negative number
 	if (!isAdding) {
